@@ -1,4 +1,5 @@
 import os
+import json
 import streamlit as st
 from langfuse.openai import openai
 from langfuse import Langfuse
@@ -18,6 +19,36 @@ openai.base_url = "https://api.groq.com/openai/v1/"
 
 # Initialize Langfuse client for manual scoring
 langfuse = Langfuse()
+
+
+# Sample Tools for demonstration
+def get_stock_price(ticker: str):
+    """Get the current stock price for a given ticker symbol."""
+    # Dummy implementation
+    prices = {"AAPL": 175.0, "GOOGL": 140.0, "MSFT": 420.0, "TSLA": 180.0}
+    return prices.get(ticker.upper(), 100.0)
+
+
+# OpenAI-compatible tool definitions
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock_price",
+            "description": "Get the current stock price for a given ticker symbol.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": "The stock ticker symbol, e.g. AAPL",
+                    },
+                },
+                "required": ["ticker"],
+            },
+        },
+    }
+]
 
 st.set_page_config(page_title="Workshop 8: Langfuse Chatbot", page_icon="🚀")
 
@@ -148,17 +179,61 @@ if prompt := st.chat_input("Ask anything..."):
     # Call LLM with Langfuse tracking
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
+            # List to store the chat turn messages (for handling tool calls)
+            current_messages = [
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages
+            ]
+
             # Use Langfuse's wrapped OpenAI client for automatic tracking
             # It tracks: Latency (Speed) and Tokens (Usage)
             response = openai.chat.completions.create(
                 model=MODEL_NAME,
-                messages=[
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages
-                ],
+                messages=current_messages,
+                tools=tools,
+                tool_choice="auto",
                 name="Workshop-8-Chat",
                 trace_id=st.session_state.trace_id,
             )
+
+            # Handle Tool Calls
+            assistant_msg = response.choices[0].message
+            if assistant_msg.tool_calls:
+                # Add tool calling message to the conversation
+                current_messages.append(assistant_msg)
+
+                # Execute tool calls
+                for tool_call in assistant_msg.tool_calls:
+                    function_name = tool_call.function.name
+                    function_args = json.loads(tool_call.function.arguments)
+
+                    if function_name == "get_stock_price":
+                        ticker = function_args.get("ticker", "AAPL")
+
+                        with langfuse.start_as_current_observation(
+                            as_type="span", name="process-request"
+                        ) as span:
+                            span.update(input=function_args)
+                            price = get_stock_price(ticker)
+                            span.update(output=price)
+
+                        # Add tool result to messages
+                        current_messages.append(
+                            {
+                                "tool_call_id": tool_call.id,
+                                "role": "tool",
+                                "name": function_name,
+                                "content": str(price),
+                            }
+                        )
+
+                # Final response with tool results
+                response = openai.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=current_messages,
+                    name="Workshop-8-Chat-Tool-Result",
+                    trace_id=st.session_state.trace_id,
+                )
 
             answer = response.choices[0].message.content
 
