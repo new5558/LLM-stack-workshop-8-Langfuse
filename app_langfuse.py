@@ -2,7 +2,7 @@ import os
 import json
 import streamlit as st
 from langfuse.openai import openai
-from langfuse import Langfuse
+from langfuse import Langfuse, propagate_attributes
 from dotenv import load_dotenv
 import uuid
 
@@ -187,14 +187,18 @@ if prompt := st.chat_input("Ask anything..."):
 
             # Use Langfuse's wrapped OpenAI client for automatic tracking
             # It tracks: Latency (Speed) and Tokens (Usage)
-            response = openai.chat.completions.create(
-                model=MODEL_NAME,
-                messages=current_messages,
-                tools=tools,
-                tool_choice="auto",
-                name="Workshop-8-Chat",
-                trace_id=st.session_state.trace_id,
-            )
+            with propagate_attributes(
+                session_id=st.session_state.session_id,
+                user_id=st.session_state.session_id,
+            ):
+                response = openai.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=current_messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    name="Workshop-8-Chat",
+                    trace_id=st.session_state.trace_id,
+                )
 
             # Handle Tool Calls
             assistant_msg = response.choices[0].message
@@ -213,9 +217,13 @@ if prompt := st.chat_input("Ask anything..."):
                         with langfuse.start_as_current_observation(
                             as_type="span", name="process-request"
                         ) as span:
-                            span.update(input=function_args)
-                            price = get_stock_price(ticker)
-                            span.update(output=price)
+                            with propagate_attributes(
+                                session_id=st.session_state.session_id,
+                                user_id=st.session_state.session_id,
+                            ):
+                                span.update(input=function_args)
+                                price = get_stock_price(ticker)
+                                span.update(output=price)
 
                         # Add tool result to messages
                         current_messages.append(
@@ -228,12 +236,16 @@ if prompt := st.chat_input("Ask anything..."):
                         )
 
                 # Final response with tool results
-                response = openai.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=current_messages,
-                    name="Workshop-8-Chat-Tool-Result",
-                    trace_id=st.session_state.trace_id,
-                )
+                with propagate_attributes(
+                    session_id=st.session_state.session_id,
+                    user_id=st.session_state.session_id,
+                ):
+                    response = openai.chat.completions.create(
+                        model=MODEL_NAME,
+                        messages=current_messages,
+                        name="Workshop-8-Chat-Tool-Result",
+                        trace_id=st.session_state.trace_id,
+                    )
 
             answer = response.choices[0].message.content
 
@@ -244,9 +256,13 @@ if prompt := st.chat_input("Ask anything..."):
 
             # LLM-as-a-Judge: Evaluate the response quality
             with st.spinner("🤔 Running LLM-as-Judge evaluation..."):
-                evaluation_text, scores = evaluate_response_with_llm(
-                    prompt, answer, st.session_state.trace_id
-                )
+                with propagate_attributes(
+                    session_id=st.session_state.session_id,
+                    user_id=st.session_state.session_id,
+                ):
+                    evaluation_text, scores = evaluate_response_with_llm(
+                        prompt, answer, st.session_state.trace_id
+                    )
 
             if evaluation_text:
                 with st.expander("📊 LLM-as-Judge Evaluation"):
